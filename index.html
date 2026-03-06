@@ -1,4 +1,4 @@
-﻿<!DOCTYPE html>
+<!DOCTYPE html>
 <html lang="pa">
 <head>
     <meta charset="UTF-8">
@@ -43,7 +43,7 @@
     <div class="header-subline">By Raj Kamboj 9465428299</div>
     
     <div class="upload-area" id="dropZone" onclick="document.getElementById('imgIn').click()">
-        <p>📸 <b>Tap to Upload (Batch of 10)</b></p>
+        <p>📸 <b>Tap to Upload (Batch of 5)</b></p>
         <input type="file" id="imgIn" accept="image/*" multiple hidden>
     </div>
 
@@ -93,22 +93,41 @@
         firstImageUrl = URL.createObjectURL(files[0]);
         let fullText = "";
         const container = document.getElementById('ocrMainContainer');
-        for (let i = 0; i < files.length; i += 10) {
-            const batch = files.slice(i, i + 10);
+        document.getElementById('status').innerText = "Processing 5 images at a time...";
+        
+        // Loop through in batches of 5 and process SIMULTANEOUSLY
+        for (let i = 0; i < files.length; i += 5) {
+            const batch = files.slice(i, i + 5);
+            
+            // Promise.all runs the whole batch of 5 at the exact same time
             const results = await Promise.all(batch.map(async (file, idx) => {
                 const gIdx = i + idx;
+                
+                // Create the card UI
                 const card = document.createElement('div');
                 card.className = 'card';
                 card.innerHTML = `Page ${gIdx + 1}<div class="progress-bar"><div id="bar-${gIdx}" class="progress-fill"></div></div>`;
                 container.appendChild(card);
-                const res = await Tesseract.recognize(file, 'eng', { 
-                    logger: m => { if(m.status === 'recognizing text') {
-                        const bar = document.getElementById(`bar-${gIdx}`);
-                        if(bar) bar.style.width = (m.progress*100)+"%";
-                    }}
-                });
-                return res.data.text;
+                
+                try {
+                    const res = await Tesseract.recognize(file, 'eng', { 
+                        logger: m => { if(m.status === 'recognizing text') {
+                            const bar = document.getElementById(`bar-${gIdx}`);
+                            if(bar) bar.style.width = (m.progress*100)+"%";
+                        }}
+                    });
+                    return res.data.text;
+                } catch (error) {
+                    console.error("OCR Error on Page " + (gIdx + 1), error);
+                    const bar = document.getElementById(`bar-${gIdx}`);
+                    if(bar) { 
+                        bar.style.background = "#d73a49"; // Red on error
+                        bar.style.width = "100%"; 
+                    }
+                    return `\n[OCR Error on Page ${gIdx + 1}]\n`;
+                }
             }));
+            
             fullText += results.join(" ") + " ";
         }
         finalizeOCR(fullText);
@@ -119,8 +138,15 @@
         firstImageUrl = canvas.toDataURL('image/jpeg');
         closeCropper();
         document.getElementById('dropZone').style.display = 'none';
-        const res = await Tesseract.recognize(firstImageUrl, 'eng');
-        finalizeOCR(res.data.text);
+        
+        try {
+            const res = await Tesseract.recognize(firstImageUrl, 'eng');
+            finalizeOCR(res.data.text);
+        } catch (error) {
+            console.error("Cropped OCR Error", error);
+            document.getElementById('status').innerText = "OCR Failed! Please refresh and try again.";
+            document.getElementById('status').style.color = "#d73a49";
+        }
     }
 
     function finalizeOCR(text) {
@@ -138,8 +164,13 @@
         const text = document.getElementById('editArea').value.trim();
         if (!text) { status.innerText = "No text to translate."; return; }
 
-        let sentences = text.match(/[^.!?]+[.!?]*\s*/g) || [text];
-        sentences = sentences.map(s => s.trim()).filter(s => s.length > 0);
+        // Temporarily hide periods that come immediately after a number 1 to 1000
+        let safeText = text.replace(/(\b([1-9]\d{0,2}|1000))\s*\./g, "$1<DOT>");
+
+        let sentences = safeText.match(/[^.!?]+[.!?]*\s*/g) || [safeText];
+        
+        // Restore the periods back to the sentences and clean up
+        sentences = sentences.map(s => s.replace(/<DOT>/g, ".").trim()).filter(s => s.length > 0);
 
         status.innerText = `Preparing ${sentences.length} sentences...`;
         finalPairs = [];
@@ -172,13 +203,11 @@
 
     function xmlSafe(str) { return str.replace(/[<>&'"]/g, c => ({'<':'&lt;','>':'&gt;','&':'&amp;',"'":'&apos;','"':'&quot;'}[c])); }
 
-    // DOCX WITHOUT BOLD (Normal Font)
     async function generateDocx() {
         const zip = new JSZip();
         const marginXml = `<w:pgMar w:top="288" w:right="288" w:bottom="288" w:left="288"/>`;
         const spacingXml = `<w:spacing w:after="0" w:line="240" w:lineRule="auto"/>`; 
         
-        // <w:b/> removed for normal font
         const bodyXml = finalPairs.map(i => `
             <w:p><w:pPr>${spacingXml}</w:pPr><w:r><w:t>${xmlSafe(i.en)}</w:t></w:r></w:p>
             <w:p><w:pPr>${spacingXml}</w:pPr><w:r><w:rPr><w:rFonts w:ascii="Nirmala UI" w:hAnsi="Nirmala UI" w:cs="Nirmala UI"/><w:color w:val="FF0000"/></w:rPr><w:t>${xmlSafe(i.pa)}</w:t></w:r></w:p>
@@ -195,7 +224,6 @@
         saveFile(blob, "RajKamboj_Translation.docx");
     }
 
-    // HTML WITHOUT BOLD (Normal Font)
     function generateHtmlText() {
         let htmlContent = `<!DOCTYPE html><html><head><meta charset="UTF-8"><style>
             body { font-family: sans-serif; padding: 0.2in; line-height: 1.2; font-weight: normal; }
@@ -223,7 +251,6 @@
             window.URL.revokeObjectURL(url);
         }, 1000);
         
-        // Buttons and text remain visible for further downloads
         document.getElementById('status').innerText = "File Downloaded! You can save other formats now.";
     }
 </script>
